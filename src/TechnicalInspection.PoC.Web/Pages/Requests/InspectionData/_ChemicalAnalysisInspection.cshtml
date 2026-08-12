@@ -1,0 +1,51 @@
+@using TechnicalInspection.PoC.Requests
+@model TechnicalInspection.PoC.Requests.ChemicalAnalysisInspectionData
+
+@* Carries the conditional-field example from section 13: when Result is Positive, two extra
+   fields appear and become mandatory. The show/hide is convenience only - the rule is enforced
+   server-side by IValidatableObject on the model itself.
+   The show/hide lives in Create.js rather than here, because cards are also cloned into the page
+   after load and a script rendered per card would only ever wire up the ones present at load. *@
+
+<div class="row g-3" data-chemical-analysis>
+    <div class="col-md-5">
+        <label asp-for="SubstanceName" class="form-label"></label>
+        <input asp-for="SubstanceName" class="form-control" placeholder="e.g. Sample A" />
+        <span asp-validation-for="SubstanceName" class="text-danger small"></span>
+    </div>
+    <div class="col-md-3">
+        <label asp-for="SampleWeight" class="form-label"></label>
+        <input asp-for="SampleWeight" class="form-control" />
+        <span asp-validation-for="SampleWeight" class="text-danger small"></span>
+    </div>
+    <div class="col-md-4">
+        <label asp-for="Result" class="form-label"></label>
+        <select asp-for="Result"
+                asp-items="Html.GetEnumSelectList<ChemicalResult>()"
+                class="form-select"
+                data-chemical-result>
+        </select>
+        <span asp-validation-for="Result" class="text-danger small"></span>
+    </div>
+    <div class="col-12">
+        <label asp-for="ChemicalComposition" class="form-label"></label>
+        <input asp-for="ChemicalComposition" class="form-control" />
+        <span asp-validation-for="ChemicalComposition" class="text-danger small"></span>
+    </div>
+
+    <div class="col-12" data-positive-only>
+        <div class="border-start border-4 border-warning ps-3">
+            <p class="small text-muted mb-2">Required when the result is Positive.</p>
+            <div class="mb-3">
+                <label asp-for="AdditionalFindings" class="form-label"></label>
+                <textarea asp-for="AdditionalFindings" class="form-control" rows="2"></textarea>
+                <span asp-validation-for="AdditionalFindings" class="text-danger small"></span>
+            </div>
+            <div>
+                <label asp-for="RequiredTests" class="form-label"></label>
+                <input asp-for="RequiredTests" class="form-control" />
+                <span asp-validation-for="RequiredTests" class="text-danger small"></span>
+            </div>
+        </div>
+    </div>
+</div>

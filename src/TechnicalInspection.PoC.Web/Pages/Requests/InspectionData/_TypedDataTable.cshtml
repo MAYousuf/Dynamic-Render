@@ -1,0 +1,38 @@
+@using System.ComponentModel.DataAnnotations
+@using System.Reflection
+@model TechnicalInspection.PoC.Requests.InspectionData
+
+@* Read-only view of the rebuilt object. Reflection is used here deliberately: the point is to
+   show that the runtime type and its real properties came back out of a single JSON column.
+   Data entry (Step 3) uses strongly typed partials with no reflection at all. *@
+
+@{
+    var properties = Model.GetType()
+        .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+        .Where(p => p.CanRead)
+        .ToList();
+}
+
+<table class="table table-sm mb-0">
+    <tbody>
+        @foreach (var property in properties)
+        {
+            var label = property.GetCustomAttribute<DisplayAttribute>()?.Name ?? property.Name;
+            var value = property.GetValue(Model);
+
+            <tr>
+                <th class="w-50 fw-normal text-muted">@label</th>
+                <td>
+                    @if (value == null || (value is string s && string.IsNullOrWhiteSpace(s)))
+                    {
+                        <span class="text-muted">&mdash;</span>
+                    }
+                    else
+                    {
+                        @value.ToString()
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>

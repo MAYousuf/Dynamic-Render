@@ -1,0 +1,148 @@
+@page
+@model TechnicalInspection.PoC.Web.Pages.Requests.CreateModel
+@{
+    ViewData["Title"] = "New inspection request";
+
+    // Read by the row partials, which are rendered both live and inside the <template> blocks.
+    ViewData["EvidenceTypeOptions"] = Model.EvidenceTypeOptions;
+    ViewData["InspectionTypeOptions"] = Model.InspectionTypeOptions;
+}
+
+<div class="row">
+    <div class="col-12">
+        <h2 class="mb-3">Inspection request</h2>
+
+        <partial name="_WizardSteps" />
+
+        <div class="alert alert-warning d-none" data-client-warning></div>
+
+        @if (!ViewData.ModelState.IsValid)
+        {
+            <div asp-validation-summary="ModelOnly" class="alert alert-danger"></div>
+        }
+
+        <form method="post" data-request-form data-active-pane="@Model.ActivePane">
+
+            @* ---------- Pane 1: basic data ---------- *@
+            <section data-pane="1" class="d-none">
+                <div class="card">
+                    <div class="card-header">Basic data</div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label asp-for="Basic.RequestNumber" class="form-label"></label>
+                            <input asp-for="Basic.RequestNumber" class="form-control" />
+                            <span asp-validation-for="Basic.RequestNumber" class="text-danger"></span>
+                        </div>
+
+                        <div class="mb-3">
+                            <label asp-for="Basic.Subject" class="form-label"></label>
+                            <input asp-for="Basic.Subject" class="form-control"
+                                   placeholder="e.g. Case 2026/114 - armed robbery" />
+                            <span asp-validation-for="Basic.Subject" class="text-danger"></span>
+                        </div>
+
+                        <div class="mb-3">
+                            <label asp-for="Basic.RequestDate" class="form-label"></label>
+                            <input asp-for="Basic.RequestDate" type="date" class="form-control" />
+                            <span asp-validation-for="Basic.RequestDate" class="text-danger"></span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            @* ---------- Pane 2: exhibits, evidences, inspections ---------- *@
+            <section data-pane="2" class="d-none">
+                <div data-container="exhibits">
+                    @for (var e = 0; e < Model.Exhibits.Count; e++)
+                    {
+                        <partial name="_ExhibitRow" for="Exhibits[e]" />
+                    }
+                </div>
+
+                <button type="button" class="btn btn-outline-primary mb-3" data-action="add-exhibit">
+                    Add exhibit
+                </button>
+
+                <p class="text-muted">
+                    This pane records structure only. The inspection-specific fields are resolved from
+                    the evidence type and inspection type in step 3.
+                </p>
+            </section>
+
+            @* ---------- Pane 3: strongly typed inspection data ---------- *@
+            <section data-pane="3" class="d-none">
+                <div data-invalidated-notices></div>
+
+                <div data-container="inspection-data">
+                    @for (var i = 0; i < Model.Inspections.Count; i++)
+                    {
+                        var context = Model.GetContext(Model.Inspections[i].InspectionId);
+
+                        if (context == null)
+                        {
+                            continue;
+                        }
+
+                        ViewData["CardContext"] = context;
+                        <partial name="_InspectionDataCard" for="Inspections[i]" />
+                    }
+                </div>
+
+                <p class="text-muted">
+                    Every form above was resolved from its evidence type and inspection type, is
+                    rendered by its own strongly typed partial, and is bound back by the single post
+                    below.
+                </p>
+            </section>
+
+            <div class="d-flex gap-2 mb-4">
+                <a asp-page="Index" class="btn btn-outline-secondary">Cancel</a>
+                <button type="button" class="btn btn-outline-secondary d-none" data-nav="back">Back</button>
+                <button type="button" class="btn btn-primary ms-auto" data-nav="next">Continue</button>
+                <button type="submit" class="btn btn-primary ms-auto d-none" data-nav="submit">
+                    Submit &amp; persist to database
+                </button>
+            </div>
+        </form>
+
+        <p class="text-muted">
+            The whole request lives in this one form until it is submitted. There is no draft and no
+            intermediate save: submitting is the only request that writes anything.
+        </p>
+    </div>
+</div>
+
+@* ---------- Templates cloned by Create.js ---------- *@
+@* Rendered under sentinel prefixes (ExhibitTemplate[0], DataTemplates[n]); Create.js rewrites those
+   to the real indices on clone. Content inside <template> is inert, so none of it is posted. *@
+
+<div hidden>
+    <template data-template="exhibit">
+        <partial name="_ExhibitRow" for="ExhibitTemplate[0]" />
+    </template>
+
+    <template data-template="evidence">
+        <partial name="_EvidenceRow" for="ExhibitTemplate[0].Evidences[0]" />
+    </template>
+
+    <template data-template="inspection">
+        <partial name="_InspectionRow" for="ExhibitTemplate[0].Evidences[0].Inspections[0]" />
+    </template>
+
+    @for (var t = 0; t < Model.DataTemplates.Count; t++)
+    {
+        ViewData["CardContext"] = Model.DataTemplateContexts[t];
+
+        <template data-template="data" data-discriminator="@Model.DataTemplateContexts[t].Discriminator">
+            <partial name="_InspectionDataCard" for="DataTemplates[t]" />
+        </template>
+    }
+</div>
+
+<script type="application/json" data-request-form-config>@Html.Raw(Model.ClientConfigJson)</script>
+
+@section scripts {
+    <abp-script-bundle>
+        <abp-script src="/Pages/Requests/Create.js" />
+    </abp-script-bundle>
+}

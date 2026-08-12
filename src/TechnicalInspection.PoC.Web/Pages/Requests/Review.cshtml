@@ -1,0 +1,88 @@
+@page
+@model TechnicalInspection.PoC.Web.Pages.Requests.ReviewModel
+@{
+    ViewData["Title"] = "Submitted request";
+}
+
+<div class="row">
+    <div class="col-12">
+        <div class="alert alert-success">
+            Submitted and persisted. Everything below was read back out of the database.
+        </div>
+
+        <h2 class="mb-1">@Model.Detail.Subject</h2>
+        <p class="text-muted">
+            Request @Model.Detail.RequestNumber &middot;
+            @Model.Detail.RequestDate.ToString("yyyy-MM-dd") &middot;
+            @Model.Detail.Status
+        </p>
+
+        @foreach (var exhibit in Model.Detail.Exhibits)
+        {
+            <div class="card mb-3">
+                <div class="card-header">
+                    <strong>Exhibit #@exhibit.SequenceNumber</strong>
+                    @if (!string.IsNullOrWhiteSpace(exhibit.Description))
+                    {
+                        <span class="text-muted ms-2">@exhibit.Description</span>
+                    }
+                </div>
+                <div class="card-body">
+                    @foreach (var evidence in exhibit.Evidences)
+                    {
+                        <h6>
+                            <span class="badge bg-secondary">@evidence.EvidenceTypeDisplayName</span>
+                            @if (!string.IsNullOrWhiteSpace(evidence.Description))
+                            {
+                                <span class="text-muted ms-2 fw-normal">@evidence.Description</span>
+                            }
+                        </h6>
+
+                        @foreach (var inspection in evidence.Inspections)
+                        {
+                            <div class="border rounded p-3 mb-3">
+                                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                                    <span class="badge bg-info text-dark">@inspection.InspectionTypeDisplayName</span>
+                                    <span class="small text-muted">
+                                        discriminator <code>@inspection.DataDiscriminator</code>
+                                    </span>
+                                </div>
+
+                                @if (inspection.DeserializationError != null)
+                                {
+                                    <div class="alert alert-danger">
+                                        Could not rebuild this inspection's model: <code>@inspection.DeserializationError</code>
+                                    </div>
+                                }
+
+                                <div class="row g-3">
+                                    <div class="col-lg-6">
+                                        <p class="small text-uppercase text-muted mb-1">
+                                            Stored in the JSON column
+                                        </p>
+                                        <pre class="bg-body-tertiary border rounded p-2 mb-0 small" style="overflow-x:auto;"><code>@inspection.FormattedJson</code></pre>
+                                    </div>
+                                    <div class="col-lg-6">
+                                        <p class="small text-uppercase text-muted mb-1">
+                                            Rebuilt C# object
+                                            @if (inspection.DataTypeName != null)
+                                            {
+                                                <code class="ms-1">@inspection.DataTypeName</code>
+                                            }
+                                        </p>
+                                        @if (inspection.Data != null)
+                                        {
+                                            <partial name="InspectionData/_TypedDataTable" model="inspection.Data" />
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        }
+
+        <a asp-page="Index" class="btn btn-outline-secondary">Back to requests</a>
+    </div>
+</div>

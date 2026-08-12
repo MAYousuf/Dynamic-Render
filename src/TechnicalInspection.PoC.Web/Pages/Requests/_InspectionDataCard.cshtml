@@ -1,0 +1,38 @@
+@model InspectionEntryInput
+@{
+    var prefix = Html.Name(string.Empty);
+    var context = (InspectionCardContext)ViewData["CardContext"]!;
+}
+
+@* The partial name comes from the resolved combination and never from the request. *@
+
+<div class="card mb-3"
+     data-row="data"
+     data-prefix="@prefix"
+     data-discriminator="@context.Discriminator"
+     data-inspection-id="@Model.InspectionId">
+    <div class="card-header">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <strong>Exhibit #<span data-header="exhibit">@context.ExhibitSequenceNumber</span></strong>
+                <span class="mx-1 text-muted">/</span>
+                <span class="badge bg-secondary" data-header="evidence-type">@context.EvidenceTypeDisplayName</span>
+                <span class="mx-1 text-muted">/</span>
+                <span class="badge bg-info text-dark" data-header="inspection-type">@context.InspectionTypeDisplayName</span>
+                <span class="text-muted ms-2" data-header="evidence-description">@context.EvidenceDescription</span>
+            </div>
+            <code class="small text-muted">@context.DataTypeName</code>
+        </div>
+    </div>
+    <div class="card-body">
+        <input type="hidden" asp-for="InspectionId" data-field="inspection-id" />
+
+        @* Read back by InspectionDataModelBinder to decide which concrete type to bind, and
+           verified server-side against what the combination actually resolves to. *@
+        <input type="hidden" asp-for="Discriminator" data-field="discriminator" />
+
+        @* `for` sets HtmlFieldPrefix to <prefix>.Data, so a plain asp-for="Caliber" inside the
+           strongly typed partial emits name="Inspections[0].Data.Caliber" and binds straight back. *@
+        <partial name="InspectionData/@context.PartialViewName" for="Data" />
+    </div>
+</div>

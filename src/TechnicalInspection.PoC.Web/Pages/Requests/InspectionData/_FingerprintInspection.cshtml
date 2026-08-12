@@ -1,0 +1,25 @@
+@model TechnicalInspection.PoC.Requests.FingerprintInspectionData
+
+<div class="row g-3">
+    <div class="col-md-5">
+        <label asp-for="FingerprintClassification" class="form-label"></label>
+        <input asp-for="FingerprintClassification" class="form-control" placeholder="e.g. Loop / Whorl / Arch" />
+        <span asp-validation-for="FingerprintClassification" class="text-danger small"></span>
+    </div>
+    <div class="col-md-3">
+        <label asp-for="NumberOfPrints" class="form-label"></label>
+        <input asp-for="NumberOfPrints" class="form-control" />
+        <span asp-validation-for="NumberOfPrints" class="text-danger small"></span>
+    </div>
+    <div class="col-md-4 d-flex align-items-end">
+        <div class="form-check">
+            <input asp-for="LiftedSuccessfully" class="form-check-input" />
+            <label asp-for="LiftedSuccessfully" class="form-check-label"></label>
+        </div>
+    </div>
+    <div class="col-12">
+        <label asp-for="Findings" class="form-label"></label>
+        <textarea asp-for="Findings" class="form-control" rows="2"></textarea>
+        <span asp-validation-for="Findings" class="text-danger small"></span>
+    </div>
+</div>

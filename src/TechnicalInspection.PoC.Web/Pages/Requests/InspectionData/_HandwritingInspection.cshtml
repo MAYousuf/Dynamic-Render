@@ -1,0 +1,29 @@
+@model TechnicalInspection.PoC.Requests.HandwritingInspectionData
+
+<div class="row g-3">
+    <div class="col-md-6">
+        <label asp-for="DocumentDescription" class="form-label"></label>
+        <input asp-for="DocumentDescription" class="form-control" placeholder="e.g. Ransom note" />
+        <span asp-validation-for="DocumentDescription" class="text-danger small"></span>
+    </div>
+    <div class="col-md-6">
+        <label asp-for="ReferenceSample" class="form-label"></label>
+        <input asp-for="ReferenceSample" class="form-control" placeholder="e.g. Suspect writing sample #3" />
+        <span asp-validation-for="ReferenceSample" class="text-danger small"></span>
+    </div>
+    <div class="col-md-4">
+        <label asp-for="DocumentDate" class="form-label"></label>
+        <input asp-for="DocumentDate" type="date" class="form-control" />
+        <span asp-validation-for="DocumentDate" class="text-danger small"></span>
+    </div>
+    <div class="col-md-4">
+        <label asp-for="MatchConfidence" class="form-label"></label>
+        <input asp-for="MatchConfidence" class="form-control" />
+        <span asp-validation-for="MatchConfidence" class="text-danger small"></span>
+    </div>
+    <div class="col-12">
+        <label asp-for="Conclusion" class="form-label"></label>
+        <textarea asp-for="Conclusion" class="form-control" rows="2"></textarea>
+        <span asp-validation-for="Conclusion" class="text-danger small"></span>
+    </div>
+</div>

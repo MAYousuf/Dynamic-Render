@@ -1,0 +1,26 @@
+@using Microsoft.AspNetCore.Mvc.Rendering
+@model InspectionInput
+@{
+    var prefix = Html.Name(string.Empty);
+
+    var inspectionTypeOptions = ViewData["RowInspectionTypeOptions"] as List<SelectListItem>
+                                ?? new List<SelectListItem>();
+}
+
+<div class="row g-2 align-items-end mb-2" data-row="inspection" data-prefix="@prefix">
+    @* Generated in the browser when the row is added; the only link to this inspection's data card. *@
+    <input type="hidden" asp-for="Id" data-field="inspection-id" />
+
+    <div class="col-md-6">
+        <label asp-for="InspectionTypeCode" class="form-label">Inspection type</label>
+        <select asp-for="InspectionTypeCode" asp-items="inspectionTypeOptions"
+                class="form-select" data-select="inspection-type">
+            <option value="">-- select --</option>
+        </select>
+    </div>
+    <div class="col-md-2">
+        <button type="button" class="btn btn-sm btn-outline-danger" data-action="remove-inspection">
+            Remove
+        </button>
+    </div>
+</div>

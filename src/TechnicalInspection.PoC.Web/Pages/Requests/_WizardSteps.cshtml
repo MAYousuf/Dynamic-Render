@@ -1,0 +1,21 @@
+@{
+    var steps = new[]
+    {
+        (Number: 1, Title: "Basic data"),
+        (Number: 2, Title: "Exhibits, evidences & inspections"),
+        (Number: 3, Title: "Inspection data")
+    };
+}
+
+@* The whole wizard is one page now, so which step is current is a client-side concern:
+   Create.js applies the state classes below as the panes change. *@
+
+<ol class="list-unstyled d-flex flex-wrap gap-2 mb-4" data-wizard-steps>
+    @foreach (var step in steps)
+    {
+        <li class="px-3 py-2 rounded bg-body-secondary text-body-secondary" data-step="@step.Number">
+            <strong>Step @step.Number</strong>
+            <span class="ms-1">@step.Title</span>
+        </li>
+    }
+</ol>

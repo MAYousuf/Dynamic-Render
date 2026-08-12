@@ -1,0 +1,57 @@
+@page
+@model TechnicalInspection.PoC.Web.Pages.Requests.IndexModel
+@{
+    ViewData["Title"] = "Inspection requests";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">Inspection requests</h2>
+    <a asp-page="Create" class="btn btn-primary">New request</a>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        Submitted <span class="text-muted small ms-1">persisted in SQL Server</span>
+    </div>
+    <div class="card-body">
+        @if (!Model.Submitted.Any())
+        {
+            <p class="text-muted mb-0">Nothing submitted yet.</p>
+        }
+        else
+        {
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Request number</th>
+                        <th>Subject</th>
+                        <th>Request date</th>
+                        <th>Inspections</th>
+                        <th class="text-end"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var request in Model.Submitted)
+                    {
+                        <tr>
+                            <td>@request.RequestNumber</td>
+                            <td>@request.Subject</td>
+                            <td>@request.RequestDate.ToString("yyyy-MM-dd")</td>
+                            <td>@request.InspectionCount</td>
+                            <td class="text-end">
+                                <a asp-page="Review" asp-route-id="@request.Id" class="btn btn-sm btn-outline-primary">
+                                    View stored JSON
+                                </a>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+<p class="text-muted mt-3 mb-0">
+    A request is captured in a single form and written to the database once, when it is submitted.
+    Nothing is stored server-side before that.
+</p>
