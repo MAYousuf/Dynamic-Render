@@ -1,0 +1,19 @@
+@model CreateModel
+
+@* The whole of step 3. Rendered inline by Create.cshtml when a failed post is redisplayed, and
+   returned on its own by CreateModel.OnPostDataPaneAsync when the browser asks for the pane.
+   Both paths render it under an empty field prefix, so `for="Inspections[i]"` emits exactly the
+   names the final post binds back. *@
+
+@for (var i = 0; i < Model.Inspections.Count; i++)
+{
+    var context = Model.GetContext(Model.Inspections[i].InspectionId);
+
+    if (context == null)
+    {
+        continue;
+    }
+
+    ViewData["CardContext"] = context;
+    <partial name="_InspectionDataCard" for="Inspections[i]" />
+}

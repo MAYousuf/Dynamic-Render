@@ -6,9 +6,9 @@ using TechnicalInspection.PoC.Requests;
 namespace TechnicalInspection.PoC.Web.Pages.Requests;
 
 /// <summary>
-/// The bound shape of the request form. These are top-level types rather than nested page-model
-/// classes so the row partials can declare a concrete <c>@model</c>, which in turn lets the same
-/// partial render both a live row and the &lt;template&gt; the browser clones from.
+/// The bound shape of the request form. Top-level types rather than nested page-model classes,
+/// because the same graph is bound from the final form post and from the JSON body the browser
+/// sends when it asks for step 3.
 /// </summary>
 public class BasicDataInput
 {
@@ -55,6 +55,15 @@ public class InspectionInput
     public Guid Id { get; set; }
 
     public string? InspectionTypeCode { get; set; }
+}
+
+/// <summary>
+/// The JSON body of the step-3 render request: the structure the browser holds, and nothing else.
+/// Which model and which partial each inspection gets is the server's decision.
+/// </summary>
+public class DataPaneInput
+{
+    public List<ExhibitInput> Exhibits { get; set; } = new();
 }
 
 /// <summary>

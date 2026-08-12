@@ -2,147 +2,242 @@
 @model TechnicalInspection.PoC.Web.Pages.Requests.CreateModel
 @{
     ViewData["Title"] = "New inspection request";
-
-    // Read by the row partials, which are rendered both live and inside the <template> blocks.
-    ViewData["EvidenceTypeOptions"] = Model.EvidenceTypeOptions;
-    ViewData["InspectionTypeOptions"] = Model.InspectionTypeOptions;
 }
+
+@* Vue directives are written in their long form (v-bind:, v-on:) throughout this page, because
+   Razor would otherwise eat the '@' in the @@click / @@bind shorthands. *@
 
 <div class="row">
     <div class="col-12">
         <h2 class="mb-3">Inspection request</h2>
 
-        <partial name="_WizardSteps" />
+        <div id="request-wizard">
+            <partial name="_WizardSteps" />
 
-        <div class="alert alert-warning d-none" data-client-warning></div>
+            <div class="alert alert-warning" v-if="warning" v-text="warning"></div>
 
-        @if (!ViewData.ModelState.IsValid)
-        {
-            <div asp-validation-summary="ModelOnly" class="alert alert-danger"></div>
-        }
+            @* Raised when a data card is dropped because its combination changed. *@
+            <div class="alert alert-warning" v-for="notice in notices" v-bind:key="notice" v-text="notice"></div>
 
-        <form method="post" data-request-form data-active-pane="@Model.ActivePane">
+            @if (!ViewData.ModelState.IsValid)
+            {
+                <div asp-validation-summary="ModelOnly" class="alert alert-danger"></div>
+            }
 
-            @* ---------- Pane 1: basic data ---------- *@
-            <section data-pane="1" class="d-none">
-                <div class="card">
-                    <div class="card-header">Basic data</div>
-                    <div class="card-body">
-                        <div class="mb-3">
-                            <label asp-for="Basic.RequestNumber" class="form-label"></label>
-                            <input asp-for="Basic.RequestNumber" class="form-control" />
-                            <span asp-validation-for="Basic.RequestNumber" class="text-danger"></span>
-                        </div>
+            <form method="post" data-request-form>
 
-                        <div class="mb-3">
-                            <label asp-for="Basic.Subject" class="form-label"></label>
-                            <input asp-for="Basic.Subject" class="form-control"
-                                   placeholder="e.g. Case 2026/114 - armed robbery" />
-                            <span asp-validation-for="Basic.Subject" class="text-danger"></span>
-                        </div>
+                @* ---------- Pane 1: basic data ---------- *@
+                @* v-pre: plain Razor markup with unobtrusive validation attributes, which Vue has no
+                   business compiling. *@
+                <section data-pane="1" v-show="pane === 1">
+                    <div class="card" v-pre>
+                        <div class="card-header">Basic data</div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label asp-for="Basic.RequestNumber" class="form-label"></label>
+                                <input asp-for="Basic.RequestNumber" class="form-control" />
+                                <span asp-validation-for="Basic.RequestNumber" class="text-danger"></span>
+                            </div>
 
-                        <div class="mb-3">
-                            <label asp-for="Basic.RequestDate" class="form-label"></label>
-                            <input asp-for="Basic.RequestDate" type="date" class="form-control" />
-                            <span asp-validation-for="Basic.RequestDate" class="text-danger"></span>
+                            <div class="mb-3">
+                                <label asp-for="Basic.Subject" class="form-label"></label>
+                                <input asp-for="Basic.Subject" class="form-control"
+                                       placeholder="e.g. Case 2026/114 - armed robbery" />
+                                <span asp-validation-for="Basic.Subject" class="text-danger"></span>
+                            </div>
+
+                            <div class="mb-3">
+                                <label asp-for="Basic.RequestDate" class="form-label"></label>
+                                <input asp-for="Basic.RequestDate" type="date" class="form-control" />
+                                <span asp-validation-for="Basic.RequestDate" class="text-danger"></span>
+                            </div>
                         </div>
                     </div>
+                </section>
+
+                @* ---------- Pane 2: exhibits, evidences, inspections ---------- *@
+                @* Rendered entirely by Vue. Field names are computed from the loop indices, so the
+                   names model binding sees are contiguous by construction. *@
+                <section data-pane="2" v-show="pane === 2">
+                    <exhibit-row v-for="(exhibit, e) in exhibits"
+                                 v-bind:key="exhibit.key"
+                                 v-bind:exhibit="exhibit"
+                                 v-bind:index="e"
+                                 v-bind:path="'Exhibits[' + e + ']'"
+                                 v-on:remove="removeExhibit(e)"></exhibit-row>
+
+                    <button type="button" class="btn btn-outline-primary mb-3" v-on:click="addExhibit">
+                        Add exhibit
+                    </button>
+
+                    <p class="text-muted">
+                        This pane records structure only. The inspection-specific fields are resolved from
+                        the evidence type and inspection type in step 3.
+                    </p>
+                </section>
+
+                @* ---------- Pane 3: strongly typed inspection data ---------- *@
+                @* Server-rendered markup, injected as-is. Vue never compiles or owns these inputs:
+                   they are Razor output carrying their own validation attributes, and they bind
+                   straight back on the final post. *@
+                <section data-pane="3" v-show="pane === 3">
+                    <div class="text-muted mb-3" v-if="loading">Resolving inspection forms&hellip;</div>
+                    <div data-container="inspection-data" v-html="dataPaneHtml"></div>
+
+                    <p class="text-muted">
+                        Every form above was resolved from its evidence type and inspection type, is
+                        rendered by its own strongly typed partial, and is bound back by the single post
+                        below.
+                    </p>
+                </section>
+
+                <div class="d-flex gap-2 mb-4">
+                    <a asp-page="Index" class="btn btn-outline-secondary">Cancel</a>
+                    <button type="button" class="btn btn-outline-secondary" v-show="pane > 1"
+                            v-on:click="back">Back</button>
+                    <button type="button" class="btn btn-primary ms-auto" v-show="pane < 3"
+                            v-bind:disabled="loading" v-on:click="next">Continue</button>
+                    <button type="submit" class="btn btn-primary ms-auto" v-show="pane === 3">
+                        Submit &amp; persist to database
+                    </button>
                 </div>
-            </section>
-
-            @* ---------- Pane 2: exhibits, evidences, inspections ---------- *@
-            <section data-pane="2" class="d-none">
-                <div data-container="exhibits">
-                    @for (var e = 0; e < Model.Exhibits.Count; e++)
-                    {
-                        <partial name="_ExhibitRow" for="Exhibits[e]" />
-                    }
-                </div>
-
-                <button type="button" class="btn btn-outline-primary mb-3" data-action="add-exhibit">
-                    Add exhibit
-                </button>
-
-                <p class="text-muted">
-                    This pane records structure only. The inspection-specific fields are resolved from
-                    the evidence type and inspection type in step 3.
-                </p>
-            </section>
-
-            @* ---------- Pane 3: strongly typed inspection data ---------- *@
-            <section data-pane="3" class="d-none">
-                <div data-invalidated-notices></div>
-
-                <div data-container="inspection-data">
-                    @for (var i = 0; i < Model.Inspections.Count; i++)
-                    {
-                        var context = Model.GetContext(Model.Inspections[i].InspectionId);
-
-                        if (context == null)
-                        {
-                            continue;
-                        }
-
-                        ViewData["CardContext"] = context;
-                        <partial name="_InspectionDataCard" for="Inspections[i]" />
-                    }
-                </div>
-
-                <p class="text-muted">
-                    Every form above was resolved from its evidence type and inspection type, is
-                    rendered by its own strongly typed partial, and is bound back by the single post
-                    below.
-                </p>
-            </section>
-
-            <div class="d-flex gap-2 mb-4">
-                <a asp-page="Index" class="btn btn-outline-secondary">Cancel</a>
-                <button type="button" class="btn btn-outline-secondary d-none" data-nav="back">Back</button>
-                <button type="button" class="btn btn-primary ms-auto" data-nav="next">Continue</button>
-                <button type="submit" class="btn btn-primary ms-auto d-none" data-nav="submit">
-                    Submit &amp; persist to database
-                </button>
-            </div>
-        </form>
+            </form>
+        </div>
 
         <p class="text-muted">
-            The whole request lives in this one form until it is submitted. There is no draft and no
-            intermediate save: submitting is the only request that writes anything.
+            The whole request lives in this one form until it is submitted. Step 3 is fetched from the
+            server as rendered markup, but the form itself is posted exactly once: submitting is the
+            only request that writes anything.
         </p>
     </div>
 </div>
 
-@* ---------- Templates cloned by Create.js ---------- *@
-@* Rendered under sentinel prefixes (ExhibitTemplate[0], DataTemplates[n]); Create.js rewrites those
-   to the real indices on clone. Content inside <template> is inert, so none of it is posted. *@
-
-<div hidden>
-    <template data-template="exhibit">
-        <partial name="_ExhibitRow" for="ExhibitTemplate[0]" />
-    </template>
-
-    <template data-template="evidence">
-        <partial name="_EvidenceRow" for="ExhibitTemplate[0].Evidences[0]" />
-    </template>
-
-    <template data-template="inspection">
-        <partial name="_InspectionRow" for="ExhibitTemplate[0].Evidences[0].Inspections[0]" />
-    </template>
-
-    @for (var t = 0; t < Model.DataTemplates.Count; t++)
-    {
-        ViewData["CardContext"] = Model.DataTemplateContexts[t];
-
-        <template data-template="data" data-discriminator="@Model.DataTemplateContexts[t].Discriminator">
-            <partial name="_InspectionDataCard" for="DataTemplates[t]" />
-        </template>
-    }
+@* Step 3 as the server rendered it for this response - empty on a fresh GET, and the posted cards
+   with their values and validation messages when a failed post is redisplayed. Read into the Vue
+   app before it mounts, then removed. Outside the form so nothing here is ever posted. *@
+<div data-pane3-initial hidden>
+    <partial name="_InspectionDataPane" model="Model" />
 </div>
 
 <script type="application/json" data-request-form-config>@Html.Raw(Model.ClientConfigJson)</script>
 
+@* ---------- Vue row templates ---------- *@
+@* Kept here rather than in Create.js so the markup stays in Razor. Compiled at runtime, which is
+   why the full Vue build is used. *@
+
+<script type="text/x-template" id="exhibit-row-template">
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Exhibit #{{ index + 1 }}</strong>
+            <button type="button" class="btn btn-sm btn-outline-danger" v-on:click="$emit('remove')">
+                Remove exhibit
+            </button>
+        </div>
+        <div class="card-body">
+            <input type="hidden" v-bind:name="path + '.SequenceNumber'" v-bind:value="index + 1" />
+
+            <div class="mb-3">
+                <label class="form-label" v-bind:for="fieldId('Description')">Exhibit description</label>
+                <input class="form-control"
+                       v-bind:id="fieldId('Description')"
+                       v-bind:name="path + '.Description'"
+                       v-model="exhibit.description"
+                       placeholder="e.g. Items seized at the scene" />
+            </div>
+
+            <evidence-row v-for="(evidence, v) in exhibit.evidences"
+                          v-bind:key="evidence.key"
+                          v-bind:evidence="evidence"
+                          v-bind:path="path + '.Evidences[' + v + ']'"
+                          v-on:remove="exhibit.evidences.splice(v, 1)"></evidence-row>
+
+            <button type="button" class="btn btn-sm btn-outline-primary" v-on:click="addEvidence">
+                Add evidence
+            </button>
+        </div>
+    </div>
+</script>
+
+<script type="text/x-template" id="evidence-row-template">
+    <div class="border rounded p-3 mb-3 bg-body-tertiary">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label" v-bind:for="fieldId('EvidenceTypeCode')">Evidence type</label>
+
+                @* Changing this re-resolves which inspection models apply, so the inspections chosen
+                   under the old type are discarded rather than silently kept. *@
+                <select class="form-select"
+                        v-bind:id="fieldId('EvidenceTypeCode')"
+                        v-bind:name="path + '.EvidenceTypeCode'"
+                        v-model="evidence.evidenceTypeCode"
+                        v-on:change="onEvidenceTypeChanged">
+                    <option value="">-- select --</option>
+                    <option v-for="option in evidenceTypeOptions" v-bind:key="option.code"
+                            v-bind:value="option.code">{{ option.displayName }}</option>
+                </select>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label" v-bind:for="fieldId('Description')">Evidence description</label>
+                <input class="form-control"
+                       v-bind:id="fieldId('Description')"
+                       v-bind:name="path + '.Description'"
+                       v-model="evidence.description" />
+            </div>
+            <div class="col-md-2 text-end">
+                <button type="button" class="btn btn-sm btn-outline-danger" v-on:click="$emit('remove')">
+                    Remove
+                </button>
+            </div>
+        </div>
+
+        <hr />
+
+        <p class="text-muted mb-0" v-if="!evidence.evidenceTypeCode">
+            Select an evidence type to see the inspections available for it.
+        </p>
+
+        <div v-else>
+            <inspection-row v-for="(inspection, i) in evidence.inspections"
+                            v-bind:key="inspection.id"
+                            v-bind:inspection="inspection"
+                            v-bind:evidence-type-code="evidence.evidenceTypeCode"
+                            v-bind:path="path + '.Inspections[' + i + ']'"
+                            v-on:remove="evidence.inspections.splice(i, 1)"></inspection-row>
+
+            <button type="button" class="btn btn-sm btn-outline-primary mt-2" v-on:click="addInspection">
+                Add inspection
+            </button>
+        </div>
+    </div>
+</script>
+
+<script type="text/x-template" id="inspection-row-template">
+    <div class="row g-2 align-items-end mb-2">
+        @* Generated in the browser when the row is added; the only link to this inspection's data card. *@
+        <input type="hidden" v-bind:name="path + '.Id'" v-bind:value="inspection.id" />
+
+        <div class="col-md-6">
+            <label class="form-label" v-bind:for="fieldId('InspectionTypeCode')">Inspection type</label>
+            <select class="form-select"
+                    v-bind:id="fieldId('InspectionTypeCode')"
+                    v-bind:name="path + '.InspectionTypeCode'"
+                    v-model="inspection.inspectionTypeCode">
+                <option value="">-- select --</option>
+                <option v-for="option in inspectionTypeOptions" v-bind:key="option.code"
+                        v-bind:value="option.code">{{ option.displayName }}</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button type="button" class="btn btn-sm btn-outline-danger" v-on:click="$emit('remove')">
+                Remove
+            </button>
+        </div>
+    </div>
+</script>
+
 @section scripts {
     <abp-script-bundle>
+        <abp-script src="/libs/vue/vue.min.js" />
         <abp-script src="/Pages/Requests/Create.js" />
     </abp-script-bundle>
 }

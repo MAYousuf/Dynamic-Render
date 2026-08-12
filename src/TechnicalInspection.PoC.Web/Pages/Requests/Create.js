@@ -2,51 +2,55 @@
  * Drives the single-form request wizard.
  *
  * The form is posted exactly once. Everything between opening the page and submitting it happens
- * here: moving between the three panes, adding and removing exhibits / evidences / inspections, and
- * keeping the strongly typed data cards in step with the structure that decides which model each
- * one is.
+ * here: moving between the three panes, and building the exhibit / evidence / inspection structure
+ * that decides which strongly typed model each inspection gets.
  *
- * Rows are never built by hand. Every row and every data card is cloned from a <template> that the
- * server rendered from the same Razor partial the live rows use, under a sentinel prefix
- * (ExhibitTemplate[0], DataTemplates[n]). Cloning therefore preserves the exact markup, including
- * the unobtrusive-validation attributes; all this file does is rewrite the prefix.
+ * Steps 1 and 2 are Vue. Step 2's structure is a plain reactive array and each field's `name` is
+ * computed from its position in that array, so the contiguous indices model binding needs fall out
+ * of the render - there is no prefix rewriting and no reindexing here.
+ *
+ * Step 3 is not built in the browser at all. The structure is sent to the DataPane handler, which
+ * resolves each (evidence type, inspection type) combination server-side and returns the whole pane
+ * as rendered Razor. That markup is injected verbatim with v-html and Vue never owns it, so the
+ * inputs keep their asp-for names and their unobtrusive-validation attributes and bind straight
+ * back on the final post.
  */
 (function () {
     'use strict';
 
-    var form = document.querySelector('[data-request-form]');
+    /*
+     * The wizard element. Mounting *replaces* this node with the one Vue renders from it, so what is
+     * captured here is detached the moment the app mounts: `mounted` repoints this at `vm.$el`, and
+     * every DOM lookup below goes through the variable rather than holding on to a node.
+     */
+    var root = document.getElementById('request-wizard');
 
-    if (!form) {
+    if (!root || typeof Vue === 'undefined') {
         return;
     }
 
     var configElement = document.querySelector('[data-request-form-config]');
     var config = configElement ? JSON.parse(configElement.textContent) : {};
+    var evidenceTypes = config.evidenceTypes || [];
     var inspectionTypesByEvidenceType = config.inspectionTypesByEvidenceType || {};
-    var evidenceTypeNames = config.evidenceTypeNames || {};
-    var combinations = config.combinations || {};
 
-    var exhibitsContainer = form.querySelector('[data-container="exhibits"]');
-    var dataContainer = form.querySelector('[data-container="inspection-data"]');
-    var noticesContainer = form.querySelector('[data-invalidated-notices]');
-    var warningBox = document.querySelector('[data-client-warning]');
+    // Step 3 as the server rendered it for this response: empty on a fresh GET, and the posted cards
+    // when a failed post is being redisplayed. Read before Vue mounts, because mounting replaces the
+    // markup it was rendered next to.
+    var seed = document.querySelector('[data-pane3-initial]');
+    var initialDataPaneHtml = seed ? seed.innerHTML : '';
 
-    var backButton = form.querySelector('[data-nav="back"]');
-    var nextButton = form.querySelector('[data-nav="next"]');
-    var submitButton = form.querySelector('[data-nav="submit"]');
-
-    var currentPane = parseInt(form.getAttribute('data-active-pane'), 10) || 1;
+    if (seed) {
+        seed.remove();
+    }
 
     // ---------------------------------------------------------------- helpers
 
-    function rows(container, kind) {
-        if (!container) {
-            return [];
-        }
+    var keySeed = 0;
 
-        return Array.prototype.filter.call(container.children, function (element) {
-            return element.getAttribute('data-row') === kind;
-        });
+    /** Identity for v-for. Without it Vue reuses row DOM by position and typed values shift on remove. */
+    function nextKey() {
+        return 'row-' + (++keySeed);
     }
 
     function newId() {
@@ -61,440 +65,163 @@
         });
     }
 
-    // -------------------------------------------------------------- prefixing
-
-    // ASP.NET turns '[', ']' and '.' into '_' when it generates element ids, so a prefix has two
-    // written forms in the markup and both have to be rewritten.
-    function idForm(name) {
-        return name.replace(/[\[\].]/g, '_');
-    }
-
-    var NAME_ATTRIBUTES = ['name', 'data-valmsg-for', 'data-prefix'];
-    var ID_ATTRIBUTES = ['id', 'for', 'aria-describedby'];
-
-    function setPrefix(element, newPrefix) {
-        var oldPrefix = element.getAttribute('data-prefix');
-
-        if (!oldPrefix || oldPrefix === newPrefix) {
-            return;
-        }
-
-        var oldId = idForm(oldPrefix);
-        var newId_ = idForm(newPrefix);
-
-        var nodes = [element].concat(Array.prototype.slice.call(element.querySelectorAll('*')));
-
-        nodes.forEach(function (node) {
-            NAME_ATTRIBUTES.forEach(function (attribute) {
-                var value = node.getAttribute(attribute);
-
-                if (value && value.indexOf(oldPrefix) === 0) {
-                    node.setAttribute(attribute, newPrefix + value.slice(oldPrefix.length));
-                }
-            });
-
-            ID_ATTRIBUTES.forEach(function (attribute) {
-                var value = node.getAttribute(attribute);
-
-                if (value && value.indexOf(oldId) === 0) {
-                    node.setAttribute(attribute, newId_ + value.slice(oldId.length));
-                }
-            });
-        });
-    }
-
-    /**
-     * Renumbers the whole structure pane. Model binding only reads contiguous indices, so this runs
-     * after every add and remove rather than trying to patch individual rows - it is also why the
-     * old wizard had to redirect after each structural change.
-     */
-    function reindexStructure() {
-        rows(exhibitsContainer, 'exhibit').forEach(function (exhibit, e) {
-            setPrefix(exhibit, 'Exhibits[' + e + ']');
-
-            var number = exhibit.querySelector('[data-exhibit-number]');
-            var sequence = exhibit.querySelector('[data-field="sequence"]');
-
-            if (number) {
-                number.textContent = String(e + 1);
-            }
-
-            if (sequence) {
-                sequence.value = String(e + 1);
-            }
-
-            var evidenceContainer = exhibit.querySelector('[data-container="evidences"]');
-
-            rows(evidenceContainer, 'evidence').forEach(function (evidence, v) {
-                setPrefix(evidence, 'Exhibits[' + e + '].Evidences[' + v + ']');
-
-                var inspectionContainer = evidence.querySelector('[data-container="inspections"]');
-
-                rows(inspectionContainer, 'inspection').forEach(function (inspection, i) {
-                    setPrefix(
-                        inspection,
-                        'Exhibits[' + e + '].Evidences[' + v + '].Inspections[' + i + ']');
-                });
-            });
-        });
-    }
-
-    // -------------------------------------------------------------- templates
-
-    function cloneTemplate(name, discriminator) {
-        var selector = 'template[data-template="' + name + '"]';
-
-        if (discriminator) {
-            selector += '[data-discriminator="' + discriminator + '"]';
-        }
-
-        var template = document.querySelector(selector);
-
-        return template ? template.content.firstElementChild.cloneNode(true) : null;
-    }
-
-    /**
-     * The row templates are rendered from a dummy graph that has to be non-empty for the nested
-     * templates to exist at all, so a freshly added exhibit or evidence starts without inspections.
-     */
-    function cloneStructureTemplate(name) {
-        var element = cloneTemplate(name);
-
-        if (element && name !== 'inspection') {
-            element.querySelectorAll('[data-row="inspection"]').forEach(function (row) {
-                row.remove();
-            });
-        }
-
-        return element;
-    }
-
-    // ----------------------------------------------------------- dependent UI
-
-    function inspectionTypeName(evidenceTypeCode, inspectionTypeCode) {
-        var types = inspectionTypesByEvidenceType[evidenceTypeCode] || [];
-
-        for (var i = 0; i < types.length; i++) {
-            if (types[i].code === inspectionTypeCode) {
-                return types[i].displayName;
+    function displayNameOf(list, code) {
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].code === code) {
+                return list[i].displayName;
             }
         }
 
-        return inspectionTypeCode;
+        return code;
     }
 
-    function populateInspectionTypes(select, evidenceTypeCode) {
-        var types = inspectionTypesByEvidenceType[evidenceTypeCode] || [];
+    function evidenceTypeName(code) {
+        return displayNameOf(evidenceTypes, code);
+    }
 
-        select.innerHTML = '';
+    function scrollToTop() {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
 
-        var blank = document.createElement('option');
-        blank.value = '';
-        blank.textContent = '-- select --';
-        select.appendChild(blank);
+    function antiForgeryToken() {
+        if (window.abp && abp.security && abp.security.antiForgery) {
+            return abp.security.antiForgery.getToken();
+        }
 
-        types.forEach(function (type) {
-            var option = document.createElement('option');
-            option.value = type.code;
-            option.textContent = type.displayName;
-            select.appendChild(option);
+        var field = root.querySelector('input[name="__RequestVerificationToken"]');
+
+        return field ? field.value : '';
+    }
+
+    // --------------------------------------------------------------- structure
+
+    function newInspection() {
+        return { id: newId(), inspectionTypeCode: '' };
+    }
+
+    function newEvidence() {
+        return { key: nextKey(), evidenceTypeCode: '', description: '', inspections: [] };
+    }
+
+    function newExhibit() {
+        return { key: nextKey(), description: '', evidences: [newEvidence()] };
+    }
+
+    /** Rebuilds the reactive structure from the server's view of it, keys and all. */
+    function hydrate(raw) {
+        var exhibits = (raw || []).map(function (exhibit) {
+            return {
+                key: nextKey(),
+                description: exhibit.description || '',
+                evidences: (exhibit.evidences || []).map(function (evidence) {
+                    return {
+                        key: nextKey(),
+                        evidenceTypeCode: evidence.evidenceTypeCode || '',
+                        description: evidence.description || '',
+                        inspections: (evidence.inspections || []).map(function (inspection) {
+                            return {
+                                id: inspection.id || newId(),
+                                inspectionTypeCode: inspection.inspectionTypeCode || ''
+                            };
+                        })
+                    };
+                })
+            };
         });
-    }
 
-    function evidenceTypeOf(evidence) {
-        var select = evidence.querySelector('[data-select="evidence-type"]');
-        return select ? select.value : '';
-    }
-
-    function toggleEvidenceInspections(evidence) {
-        var hasType = !!evidenceTypeOf(evidence);
-        var wrapper = evidence.querySelector('[data-evidence-inspections]');
-        var placeholder = evidence.querySelector('[data-empty-evidence-type]');
-
-        if (wrapper) {
-            wrapper.hidden = !hasType;
-        }
-
-        if (placeholder) {
-            placeholder.hidden = hasType;
-        }
-    }
-
-    // --------------------------------------------------------------- messages
-
-    function showWarning(message) {
-        if (!warningBox) {
-            return;
-        }
-
-        warningBox.textContent = message;
-        warningBox.classList.remove('d-none');
-    }
-
-    function clearWarning() {
-        if (warningBox) {
-            warningBox.classList.add('d-none');
-            warningBox.textContent = '';
-        }
-    }
-
-    function renderNotices(notices) {
-        if (!noticesContainer) {
-            return;
-        }
-
-        noticesContainer.innerHTML = '';
-
-        notices.forEach(function (notice) {
-            var alert = document.createElement('div');
-            alert.className = 'alert alert-warning';
-            alert.textContent = notice;
-            noticesContainer.appendChild(alert);
-        });
-    }
-
-    // ------------------------------------------------------- structure events
-
-    form.addEventListener('click', function (event) {
-        var button = event.target.closest('button[data-action]');
-
-        if (!button || !form.contains(button)) {
-            return;
-        }
-
-        clearWarning();
-
-        switch (button.getAttribute('data-action')) {
-            case 'add-exhibit':
-                addExhibit();
-                break;
-            case 'remove-exhibit':
-                button.closest('[data-row="exhibit"]').remove();
-                reindexStructure();
-                break;
-            case 'add-evidence':
-                addEvidence(button.closest('[data-row="exhibit"]'));
-                break;
-            case 'remove-evidence':
-                button.closest('[data-row="evidence"]').remove();
-                reindexStructure();
-                break;
-            case 'add-inspection':
-                addInspection(button.closest('[data-row="evidence"]'));
-                break;
-            case 'remove-inspection':
-                button.closest('[data-row="inspection"]').remove();
-                reindexStructure();
-                break;
-            default:
-                return;
-        }
-    });
-
-    function addExhibit() {
-        var exhibit = cloneStructureTemplate('exhibit');
-
-        if (!exhibit) {
-            return;
-        }
-
-        exhibitsContainer.appendChild(exhibit);
-
-        rows(exhibit.querySelector('[data-container="evidences"]'), 'evidence')
-            .forEach(toggleEvidenceInspections);
-
-        reindexStructure();
-    }
-
-    function addEvidence(exhibit) {
-        var evidence = cloneStructureTemplate('evidence');
-
-        if (!evidence) {
-            return;
-        }
-
-        exhibit.querySelector('[data-container="evidences"]').appendChild(evidence);
-        toggleEvidenceInspections(evidence);
-        reindexStructure();
-    }
-
-    function addInspection(evidence) {
-        var inspection = cloneStructureTemplate('inspection');
-
-        if (!inspection) {
-            return;
-        }
-
-        var idField = inspection.querySelector('[data-field="inspection-id"]');
-
-        if (idField) {
-            idField.value = newId();
-        }
-
-        var select = inspection.querySelector('[data-select="inspection-type"]');
-
-        if (select) {
-            populateInspectionTypes(select, evidenceTypeOf(evidence));
-        }
-
-        evidence.querySelector('[data-container="inspections"]').appendChild(inspection);
-        reindexStructure();
-    }
-
-    form.addEventListener('change', function (event) {
-        var evidenceSelect = event.target.closest('[data-select="evidence-type"]');
-
-        if (evidenceSelect) {
-            onEvidenceTypeChanged(evidenceSelect);
-            return;
-        }
-
-        var resultSelect = event.target.closest('[data-chemical-result]');
-
-        if (resultSelect) {
-            syncChemicalAnalysis(resultSelect.closest('[data-chemical-analysis]'));
-        }
-    });
-
-    /**
-     * A different evidence type resolves to different inspection models, so the inspections chosen
-     * under the old type are no longer valid combinations and go, rather than being silently kept.
-     */
-    function onEvidenceTypeChanged(select) {
-        var evidence = select.closest('[data-row="evidence"]');
-        var container = evidence.querySelector('[data-container="inspections"]');
-        var removed = rows(container, 'inspection').length;
-
-        container.innerHTML = '';
-        toggleEvidenceInspections(evidence);
-
-        if (removed > 0) {
-            showWarning(
-                'Changing an evidence type removed ' + removed + ' inspection(s), because a ' +
-                'different evidence type resolves to different inspection models.');
-        }
-
-        reindexStructure();
+        return exhibits.length ? exhibits : [newExhibit()];
     }
 
     // ------------------------------------------------------- inspection data
 
-    function collectConfiguredInspections() {
-        var configured = [];
+    var DATA_MARKER = '.Data.';
 
-        rows(exhibitsContainer, 'exhibit').forEach(function (exhibit, e) {
-            var evidenceContainer = exhibit.querySelector('[data-container="evidences"]');
+    /** Turns `Inspections[0].Data.Caliber` into `Caliber`; anything else is not a card value. */
+    function cardValueName(name) {
+        var at = name.indexOf(DATA_MARKER);
 
-            rows(evidenceContainer, 'evidence').forEach(function (evidence) {
-                var evidenceTypeCode = evidenceTypeOf(evidence);
-                var descriptionField = evidence.querySelector('[data-field="description"]');
-                var inspectionContainer = evidence.querySelector('[data-container="inspections"]');
-
-                rows(inspectionContainer, 'inspection').forEach(function (row) {
-                    var typeSelect = row.querySelector('[data-select="inspection-type"]');
-                    var idField = row.querySelector('[data-field="inspection-id"]');
-                    var inspectionTypeCode = typeSelect ? typeSelect.value : '';
-                    var combination = combinations[evidenceTypeCode + '|' + inspectionTypeCode];
-
-                    if (!combination || !idField) {
-                        return;
-                    }
-
-                    configured.push({
-                        id: idField.value,
-                        discriminator: combination.discriminator,
-                        exhibitNumber: e + 1,
-                        evidenceTypeName: evidenceTypeNames[evidenceTypeCode] || evidenceTypeCode,
-                        inspectionTypeName: inspectionTypeName(evidenceTypeCode, inspectionTypeCode),
-                        evidenceDescription: descriptionField ? descriptionField.value : ''
-                    });
-                });
-            });
-        });
-
-        return configured;
+        return at < 0 ? null : name.slice(at + DATA_MARKER.length);
     }
 
-    function applyHeader(card, item) {
-        function set(name, value) {
+    function cards() {
+        return Array.prototype.slice.call(
+            root.querySelectorAll('[data-container="inspection-data"] [data-row="data"]'));
+    }
+
+    function cardFields(card) {
+        return Array.prototype.slice.call(card.querySelectorAll('input, select, textarea'));
+    }
+
+    function cardLabel(card) {
+        function header(name) {
             var element = card.querySelector('[data-header="' + name + '"]');
 
-            if (element) {
-                element.textContent = value;
-            }
+            return element ? element.textContent.trim() : '';
         }
 
-        set('exhibit', String(item.exhibitNumber));
-        set('evidence-type', item.evidenceTypeName);
-        set('inspection-type', item.inspectionTypeName);
-        set('evidence-description', item.evidenceDescription || '');
+        return 'Exhibit #' + header('exhibit') + ' / ' + header('evidence-type') + ' / ' +
+            header('inspection-type');
     }
 
     /**
-     * Reconciles the data pane against the structure. A card whose combination still resolves to the
-     * same model is kept as it is, so whatever was typed into it survives a trip back to pane 2;
-     * a card whose combination changed is rebuilt from the template and the discarded data is
-     * called out rather than quietly disappearing.
+     * What is currently typed into step 3, keyed by inspection id. The cards themselves are thrown
+     * away and re-rendered by the server on every visit to step 3, so this is what survives a trip
+     * back to step 2.
      */
-    function buildDataPane() {
-        var configured = collectConfiguredInspections();
-        var existing = {};
+    function snapshotCards() {
+        var snapshot = {};
 
-        rows(dataContainer, 'data').forEach(function (card) {
-            existing[card.getAttribute('data-inspection-id')] = card;
+        cards().forEach(function (card) {
+            var values = {};
+
+            cardFields(card).forEach(function (field) {
+                var name = cardValueName(field.name || '');
+
+                if (name) {
+                    values[name] = field.value;
+                }
+            });
+
+            snapshot[card.getAttribute('data-inspection-id')] = {
+                discriminator: card.getAttribute('data-discriminator'),
+                values: values
+            };
         });
 
+        return snapshot;
+    }
+
+    /**
+     * Reapplies the snapshot to the freshly rendered cards. A card whose combination now resolves to
+     * a different model is left empty and called out, rather than the data quietly disappearing.
+     */
+    function restoreCards(snapshot) {
         var notices = [];
-        var fragment = document.createDocumentFragment();
 
-        configured.forEach(function (item) {
-            var card = existing[item.id];
+        cards().forEach(function (card) {
+            var previous = snapshot[card.getAttribute('data-inspection-id')];
 
-            if (card && card.getAttribute('data-discriminator') === item.discriminator) {
-                delete existing[item.id];
-            } else {
-                if (card) {
-                    delete existing[item.id];
-                    notices.push(
-                        'Exhibit #' + item.exhibitNumber + ' / ' + item.evidenceTypeName + ' / ' +
-                        item.inspectionTypeName + ': previously entered data was discarded because ' +
-                        'the inspection configuration changed.');
-                }
-
-                card = cloneTemplate('data', item.discriminator);
-
-                if (!card) {
-                    return;
-                }
-
-                card.setAttribute('data-inspection-id', item.id);
+            if (!previous) {
+                return;
             }
 
-            applyHeader(card, item);
-            fragment.appendChild(card);
+            if (previous.discriminator !== card.getAttribute('data-discriminator')) {
+                notices.push(
+                    cardLabel(card) + ': previously entered data was discarded because the ' +
+                    'inspection configuration changed.');
+                return;
+            }
+
+            cardFields(card).forEach(function (field) {
+                var name = cardValueName(field.name || '');
+
+                if (name && Object.prototype.hasOwnProperty.call(previous.values, name)) {
+                    field.value = previous.values[name];
+                }
+            });
         });
 
-        // Anything left in `existing` belongs to an inspection that is gone; replaceChildren drops it.
-        dataContainer.replaceChildren(fragment);
-
-        rows(dataContainer, 'data').forEach(function (card, k) {
-            setPrefix(card, 'Inspections[' + k + ']');
-
-            var idField = card.querySelector('[data-field="inspection-id"]');
-            var discriminatorField = card.querySelector('[data-field="discriminator"]');
-
-            if (idField) {
-                idField.value = card.getAttribute('data-inspection-id');
-            }
-
-            if (discriminatorField) {
-                discriminatorField.value = card.getAttribute('data-discriminator');
-            }
-        });
-
-        renderNotices(notices);
-        syncConditionalFields();
-        reparseValidation();
+        return notices;
     }
 
     // ------------------------------------------------------ conditional fields
@@ -516,23 +243,37 @@
     }
 
     function syncConditionalFields() {
-        form.querySelectorAll('[data-chemical-analysis]').forEach(syncChemicalAnalysis);
+        root.querySelectorAll('[data-chemical-analysis]').forEach(syncChemicalAnalysis);
+    }
+
+    // Delegated, because step 3 is replaced wholesale every time it is rendered. Bound in `mounted`,
+    // once `root` is the element the listener has to sit on.
+    function onFieldChanged(event) {
+        var select = event.target.closest ? event.target.closest('[data-chemical-result]') : null;
+
+        if (select) {
+            syncChemicalAnalysis(select.closest('[data-chemical-analysis]'));
+        }
     }
 
     // ------------------------------------------------------------ validation
+
+    function form() {
+        return root.querySelector('[data-request-form]');
+    }
 
     function reparseValidation() {
         if (!window.jQuery || !window.jQuery.validator || !window.jQuery.validator.unobtrusive) {
             return;
         }
 
-        var $form = window.jQuery(form);
+        var $form = window.jQuery(form());
         $form.removeData('validator').removeData('unobtrusiveValidation');
         window.jQuery.validator.unobtrusive.parse($form);
     }
 
     function validateVisibleFields(scope) {
-        if (!window.jQuery || !window.jQuery.fn.valid) {
+        if (!window.jQuery || !window.jQuery.fn.valid || !scope) {
             return true;
         }
 
@@ -547,131 +288,307 @@
         return valid;
     }
 
-    /** The same rules the server enforces in CreateModel.ValidateStructure; this one is convenience. */
-    function structureProblems() {
-        var problems = [];
-        var exhibits = rows(exhibitsContainer, 'exhibit');
-        var total = 0;
+    /** Which pane an element belongs to, or null for anything outside the three panes. */
+    function paneOf(element) {
+        var section = element && element.closest ? element.closest('[data-pane]') : null;
+        var pane = section ? parseInt(section.getAttribute('data-pane'), 10) : NaN;
 
-        if (!exhibits.length) {
-            problems.push('Add at least one exhibit.');
-        }
+        return isNaN(pane) ? null : pane;
+    }
 
-        exhibits.forEach(function (exhibit, e) {
-            var evidences = rows(exhibit.querySelector('[data-container="evidences"]'), 'evidence');
+    // ------------------------------------------------------------- components
 
-            if (!evidences.length) {
-                problems.push('Exhibit #' + (e + 1) + ': add at least one evidence.');
+    /** ASP.NET turns '[', ']' and '.' into '_' when it generates element ids; labels follow suit. */
+    var fieldIdMixin = {
+        methods: {
+            fieldId: function (name) {
+                return (this.path + '.' + name).replace(/[\[\].]/g, '_');
             }
+        }
+    };
 
-            evidences.forEach(function (evidence) {
-                var evidenceTypeCode = evidenceTypeOf(evidence);
+    Vue.component('inspection-row', {
+        template: '#inspection-row-template',
+        mixins: [fieldIdMixin],
+        props: ['inspection', 'evidenceTypeCode', 'path'],
+        computed: {
+            inspectionTypeOptions: function () {
+                return inspectionTypesByEvidenceType[this.evidenceTypeCode] || [];
+            }
+        }
+    });
 
-                if (!evidenceTypeCode) {
-                    problems.push('Exhibit #' + (e + 1) + ': every evidence needs an evidence type.');
-                    return;
+    Vue.component('evidence-row', {
+        template: '#evidence-row-template',
+        mixins: [fieldIdMixin],
+        props: ['evidence', 'path'],
+        computed: {
+            evidenceTypeOptions: function () {
+                return evidenceTypes;
+            }
+        },
+        methods: {
+            addInspection: function () {
+                this.evidence.inspections.push(newInspection());
+            },
+
+            /**
+             * A different evidence type resolves to different inspection models, so the inspections
+             * chosen under the old type are no longer valid combinations and go.
+             */
+            onEvidenceTypeChanged: function () {
+                var removed = this.evidence.inspections.splice(0).length;
+
+                if (removed > 0) {
+                    this.$root.warn(
+                        'Changing an evidence type removed ' + removed + ' inspection(s), because a ' +
+                        'different evidence type resolves to different inspection models.');
+                }
+            }
+        }
+    });
+
+    Vue.component('exhibit-row', {
+        template: '#exhibit-row-template',
+        mixins: [fieldIdMixin],
+        props: ['exhibit', 'index', 'path'],
+        methods: {
+            addEvidence: function () {
+                this.exhibit.evidences.push(newEvidence());
+            }
+        }
+    });
+
+    // -------------------------------------------------------------- the wizard
+
+    new Vue({
+        el: '#request-wizard',
+
+        data: {
+            pane: config.activePane || 1,
+            exhibits: hydrate(config.exhibits),
+            dataPaneHtml: initialDataPaneHtml,
+            notices: [],
+            warning: '',
+            loading: false
+        },
+
+        computed: {
+            /** The same rules the server enforces in CreateModel.ValidateStructure. */
+            structureProblems: function () {
+                var problems = [];
+                var total = 0;
+
+                if (!this.exhibits.length) {
+                    problems.push('Add at least one exhibit.');
                 }
 
-                var inspections = rows(
-                    evidence.querySelector('[data-container="inspections"]'), 'inspection');
+                this.exhibits.forEach(function (exhibit, e) {
+                    if (!exhibit.evidences.length) {
+                        problems.push('Exhibit #' + (e + 1) + ': add at least one evidence.');
+                    }
 
-                if (!inspections.length) {
-                    problems.push(
-                        'Exhibit #' + (e + 1) + ': evidence needs at least one inspection.');
+                    exhibit.evidences.forEach(function (evidence) {
+                        if (!evidence.evidenceTypeCode) {
+                            problems.push(
+                                'Exhibit #' + (e + 1) + ': every evidence needs an evidence type.');
+                            return;
+                        }
+
+                        if (!evidence.inspections.length) {
+                            problems.push(
+                                'Exhibit #' + (e + 1) + ': evidence needs at least one inspection.');
+                        }
+
+                        evidence.inspections.forEach(function (inspection) {
+                            if (!inspection.inspectionTypeCode) {
+                                problems.push(
+                                    'Exhibit #' + (e + 1) + ': every inspection needs an inspection type.');
+                                return;
+                            }
+
+                            total++;
+                        });
+                    });
+                });
+
+                if (total === 0) {
+                    problems.push('Add at least one inspection.');
                 }
 
-                inspections.forEach(function (row) {
-                    var select = row.querySelector('[data-select="inspection-type"]');
+                return problems.filter(function (problem, index, all) {
+                    return all.indexOf(problem) === index;
+                });
+            }
+        },
 
-                    if (!select || !select.value) {
-                        problems.push(
-                            'Exhibit #' + (e + 1) + ': every inspection needs an inspection type.');
+        methods: {
+            stepClass: function (step) {
+                if (step === this.pane) {
+                    return 'bg-primary text-white';
+                }
+
+                return step < this.pane
+                    ? 'bg-success-subtle text-success-emphasis'
+                    : 'bg-body-secondary text-body-secondary';
+            },
+
+            warn: function (message) {
+                this.warning = message;
+            },
+
+            addExhibit: function () {
+                this.warning = '';
+                this.exhibits.push(newExhibit());
+            },
+
+            removeExhibit: function (index) {
+                this.warning = '';
+                this.exhibits.splice(index, 1);
+            },
+
+            back: function () {
+                this.warning = '';
+
+                if (this.pane > 1) {
+                    this.pane--;
+                    scrollToTop();
+                }
+            },
+
+            next: function () {
+                this.warning = '';
+
+                if (this.pane === 1) {
+                    if (!validateVisibleFields(root.querySelector('[data-pane="1"]'))) {
                         return;
                     }
 
-                    total++;
+                    this.pane = 2;
+                    scrollToTop();
+                    return;
+                }
+
+                if (this.pane === 2) {
+                    var problems = this.structureProblems;
+
+                    if (problems.length) {
+                        this.warning = problems.join(' ');
+                        return;
+                    }
+
+                    this.loadDataPane();
+                }
+            },
+
+            /**
+             * The theme clears jQuery Validate's `ignore`, so submitting validates the panes that are
+             * off screen as well. Without this the Submit button would simply do nothing whenever the
+             * blocking field is on a pane the user cannot see: show that pane and its first error.
+             */
+            showPaneWithFirstError: function (validator) {
+                var self = this;
+
+                var panes = (validator.errorList || [])
+                    .map(function (error) {
+                        return paneOf(error.element);
+                    })
+                    .filter(function (pane) {
+                        return pane !== null;
+                    });
+
+                if (!panes.length) {
+                    return;
+                }
+
+                var target = Math.min.apply(null, panes);
+
+                if (target === this.pane) {
+                    return;
+                }
+
+                this.pane = target;
+
+                this.$nextTick(function () {
+                    var first = validator.errorList.filter(function (error) {
+                        return paneOf(error.element) === target;
+                    })[0];
+
+                    if (first) {
+                        first.element.focus();
+                    }
+
+                    self.warning = 'Step ' + target + ' still has fields that need attention.';
+                    scrollToTop();
                 });
-            });
-        });
+            },
 
-        if (total === 0) {
-            problems.push('Add at least one inspection.');
-        }
+            /**
+             * Asks the server to render step 3 for the structure as it currently stands. Only the
+             * structure goes over the wire; which concrete model and which strongly typed partial
+             * each inspection gets is decided server-side, and comes back as markup.
+             */
+            loadDataPane: function () {
+                var self = this;
+                var snapshot = snapshotCards();
 
-        return problems.filter(function (problem, index, all) {
-            return all.indexOf(problem) === index;
-        });
-    }
+                self.loading = true;
+                self.notices = [];
 
-    // ------------------------------------------------------------ navigation
+                fetch(window.location.pathname + '?handler=DataPane', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'RequestVerificationToken': antiForgeryToken()
+                    },
+                    body: JSON.stringify({ exhibits: self.exhibits })
+                }).then(function (response) {
+                    return response.text().then(function (text) {
+                        if (!response.ok) {
+                            throw new Error(
+                                text || ('Step 3 could not be rendered (' + response.status + ').'));
+                        }
 
-    function showPane(pane) {
-        currentPane = pane;
+                        return text;
+                    });
+                }).then(function (html) {
+                    self.dataPaneHtml = html;
+                    self.pane = 3;
 
-        form.querySelectorAll('[data-pane]').forEach(function (section) {
-            section.classList.toggle(
-                'd-none',
-                parseInt(section.getAttribute('data-pane'), 10) !== pane);
-        });
-
-        document.querySelectorAll('[data-wizard-steps] [data-step]').forEach(function (item) {
-            var step = parseInt(item.getAttribute('data-step'), 10);
-            var state = step === pane
-                ? 'bg-primary text-white'
-                : step < pane
-                    ? 'bg-success-subtle text-success-emphasis'
-                    : 'bg-body-secondary text-body-secondary';
-
-            item.className = 'px-3 py-2 rounded ' + state;
-        });
-
-        backButton.classList.toggle('d-none', pane === 1);
-        nextButton.classList.toggle('d-none', pane === 3);
-        submitButton.classList.toggle('d-none', pane !== 3);
-
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-
-    nextButton.addEventListener('click', function () {
-        clearWarning();
-
-        if (currentPane === 1) {
-            if (!validateVisibleFields(form.querySelector('[data-pane="1"]'))) {
-                return;
+                    return self.$nextTick();
+                }).then(function () {
+                    self.notices = restoreCards(snapshot);
+                    syncConditionalFields();
+                    reparseValidation();
+                    scrollToTop();
+                }).catch(function (error) {
+                    self.warning = error.message;
+                }).then(function () {
+                    self.loading = false;
+                });
             }
+        },
 
-            showPane(2);
-            return;
-        }
+        mounted: function () {
+            var self = this;
 
-        if (currentPane === 2) {
-            var problems = structureProblems();
+            // Vue rendered a new element and threw away the one it mounted on, so everything the
+            // rest of this file reaches for lives under `$el` from here on - including the form the
+            // validator has to be attached to.
+            root = this.$el;
 
-            if (problems.length) {
-                showWarning(problems.join(' '));
-                return;
+            root.addEventListener('change', onFieldChanged);
+
+            // Mounting re-created pane 1's server-rendered markup, so the validator's references to
+            // it are stale.
+            reparseValidation();
+            syncConditionalFields();
+
+            if (window.jQuery) {
+                window.jQuery(form()).on('invalid-form.validate', function (event, validator) {
+                    self.showPaneWithFirstError(validator);
+                });
             }
-
-            buildDataPane();
-            showPane(3);
         }
     });
-
-    backButton.addEventListener('click', function () {
-        clearWarning();
-
-        if (currentPane > 1) {
-            showPane(currentPane - 1);
-        }
-    });
-
-    // ---------------------------------------------------------------- startup
-
-    rows(exhibitsContainer, 'exhibit').forEach(function (exhibit) {
-        rows(exhibit.querySelector('[data-container="evidences"]'), 'evidence')
-            .forEach(toggleEvidenceInspections);
-    });
-
-    syncConditionalFields();
-    showPane(currentPane);
 })();

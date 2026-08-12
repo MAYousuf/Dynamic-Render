@@ -15,26 +15,22 @@ namespace TechnicalInspection.PoC.Web.Pages.Requests;
 /// <summary>
 /// The whole request wizard: one page, one form, one post.
 /// <para>
-/// The three "steps" are panes toggled in the browser, and exhibits, evidences, inspections and
-/// their data cards are added and removed client-side by cloning server-rendered templates. Nothing
-/// is stored anywhere until <see cref="OnPostAsync"/> succeeds, which is the only write in the flow.
+/// The three "steps" are panes toggled in the browser. Steps 1 and 2 are driven by a small Vue app
+/// (Create.js): step 2's exhibits, evidences and inspections are ordinary reactive arrays, and the
+/// form field names fall out of the loop indices. Nothing is stored anywhere until
+/// <see cref="OnPostAsync"/> succeeds, which is the only write in the flow.
 /// </para>
 /// <para>
-/// What did not change is the part the PoC is about: the data card for each inspection is still a
-/// strongly typed Razor partial resolved server-side from its (evidence type, inspection type)
-/// combination, and every card in the post is still bound to its concrete
+/// Step 3 is not built in the browser at all. <see cref="OnPostDataPaneAsync"/> takes the structure
+/// as JSON and returns the whole pane rendered server-side, so the data card for each inspection is
+/// still a strongly typed Razor partial resolved from its (evidence type, inspection type)
+/// combination, and every card in the final post is still bound to its concrete
 /// <see cref="InspectionData"/> subclass by <c>InspectionDataModelBinder</c>.
 /// </para>
 /// </summary>
 public class CreateModel : PoCPageModel
 {
-    /// <summary>Sentinel prefixes the templates are rendered under; rewritten by Create.js on clone.</summary>
-    public const string ExhibitTemplatePrefix = "ExhibitTemplate[0]";
-
-    public const string DataTemplatePrefix = "DataTemplates";
-
     private readonly IMasterDataAppService _masterDataAppService;
-    private readonly IInspectionDataRegistry _registry;
     private readonly IInspectionDataTypeResolver _resolver;
     private readonly IRequestAppService _requestAppService;
 
@@ -51,20 +47,6 @@ public class CreateModel : PoCPageModel
     [BindProperty]
     public List<InspectionEntryInput> Inspections { get; set; } = new();
 
-    /// <summary>Dummy graph that exists only to give the row templates something to render against.</summary>
-    public List<ExhibitInput> ExhibitTemplate { get; } = new()
-    {
-        new ExhibitInput
-        {
-            Evidences = { new EvidenceInput { Inspections = { new InspectionInput() } } }
-        }
-    };
-
-    /// <summary>One entry per supported combination, each pre-instantiated to its concrete type.</summary>
-    public List<InspectionEntryInput> DataTemplates { get; private set; } = new();
-
-    public List<InspectionCardContext> DataTemplateContexts { get; private set; } = new();
-
     /// <summary>Context per inspection id, rebuilt from the posted structure on redisplay.</summary>
     public Dictionary<Guid, InspectionCardContext> Contexts { get; private set; } = new();
 
@@ -79,12 +61,10 @@ public class CreateModel : PoCPageModel
 
     public CreateModel(
         IMasterDataAppService masterDataAppService,
-        IInspectionDataRegistry registry,
         IInspectionDataTypeResolver resolver,
         IRequestAppService requestAppService)
     {
         _masterDataAppService = masterDataAppService;
-        _registry = registry;
         _resolver = resolver;
         _requestAppService = requestAppService;
     }
@@ -138,8 +118,63 @@ public class CreateModel : PoCPageModel
     }
 
     /// <summary>
-    /// The same structural rules the old Step 2 enforced. Create.js checks these before it lets the
-    /// user reach pane 3, but that check is convenience only - this one decides.
+    /// Renders step 3 for the structure the browser currently holds, without posting the form.
+    /// <para>
+    /// This is the whole point of the wizard: the browser sends nothing but the structure, and the
+    /// server decides - through <see cref="IInspectionDataTypeResolver"/> - which concrete model and
+    /// which strongly typed partial each inspection gets. The returned markup carries the same field
+    /// names the final post binds back, because it is rendered by the same partial under the same
+    /// prefix as an inline render.
+    /// </para>
+    /// </summary>
+    public async Task<IActionResult> OnPostDataPaneAsync([FromBody] DataPaneInput input)
+    {
+        Exhibits = input.Exhibits;
+
+        await LoadMasterDataAsync();
+
+        Inspections = new List<InspectionEntryInput>();
+
+        foreach (var (exhibit, evidence, inspection) in EnumerateStructure())
+        {
+            if (string.IsNullOrWhiteSpace(evidence.EvidenceTypeCode) ||
+                string.IsNullOrWhiteSpace(inspection.InspectionTypeCode))
+            {
+                return BadRequest(
+                    $"Exhibit #{exhibit.SequenceNumber}: every evidence needs an evidence type and " +
+                    "every inspection needs an inspection type.");
+            }
+
+            if (!_resolver.TryResolve(evidence.EvidenceTypeCode, inspection.InspectionTypeCode, out var definition))
+            {
+                return BadRequest(
+                    $"'{evidence.EvidenceTypeCode}' / '{inspection.InspectionTypeCode}' is not a " +
+                    "supported inspection combination.");
+            }
+
+            // Instantiated to the concrete type so the strongly typed partial renders against a real
+            // object of its own model type. Values already typed into a card are reapplied in the
+            // browser, so the cards go out empty.
+            Inspections.Add(new InspectionEntryInput
+            {
+                InspectionId = inspection.Id,
+                Discriminator = definition.Discriminator,
+                Data = (InspectionData)Activator.CreateInstance(definition.DataType)!
+            });
+        }
+
+        await BuildContextsAsync();
+
+        // The page's [BindProperty] properties bound against a request that carries no form data, so
+        // ModelState is full of irrelevant "required" errors that the cards would otherwise render.
+        ModelState.Clear();
+
+        return Partial("_InspectionDataPane", this);
+    }
+
+    /// <summary>
+    /// The same structural rules Create.js checks before it lets the user reach pane 3, but that
+    /// check is convenience only - this one decides.
     /// </summary>
     private void ValidateStructure()
     {
@@ -313,7 +348,6 @@ public class CreateModel : PoCPageModel
     private async Task PrepareViewAsync()
     {
         await LoadMasterDataAsync();
-        BuildDataTemplates();
         await BuildContextsAsync();
         BuildClientConfig();
     }
@@ -334,32 +368,6 @@ public class CreateModel : PoCPageModel
             InspectionTypeOptions[evidenceType.Code] = inspectionTypes
                 .Select(t => new SelectListItem(t.DisplayName, t.Code))
                 .ToList();
-        }
-    }
-
-    /// <summary>
-    /// One template per supported combination. <c>Data</c> is instantiated so the strongly typed
-    /// partial renders against a real object of its own model type rather than null.
-    /// </summary>
-    private void BuildDataTemplates()
-    {
-        DataTemplates = new List<InspectionEntryInput>();
-        DataTemplateContexts = new List<InspectionCardContext>();
-
-        foreach (var definition in _registry.Definitions)
-        {
-            DataTemplates.Add(new InspectionEntryInput
-            {
-                Discriminator = definition.Discriminator,
-                Data = (InspectionData)Activator.CreateInstance(definition.DataType)!
-            });
-
-            DataTemplateContexts.Add(new InspectionCardContext
-            {
-                Discriminator = definition.Discriminator,
-                PartialViewName = definition.PartialViewName,
-                DataTypeName = definition.DataType.Name
-            });
         }
     }
 
@@ -402,22 +410,37 @@ public class CreateModel : PoCPageModel
     }
 
     /// <summary>
-    /// Everything Create.js needs to keep the dependent dropdowns and the data cards in step with
-    /// the structure, without asking the server.
+    /// Everything the Vue app needs to render step 2: the dependent dropdown lists and the structure
+    /// itself, which on a redisplayed post is the structure that was submitted.
     /// </summary>
     private void BuildClientConfig()
     {
         var config = new
         {
+            activePane = ActivePane,
+
             inspectionTypesByEvidenceType = InspectionTypeOptions.ToDictionary(
                 pair => pair.Key,
                 pair => pair.Value.Select(o => new { code = o.Value, displayName = o.Text }).ToList()),
 
-            evidenceTypeNames = EvidenceTypeOptions.ToDictionary(o => o.Value, o => o.Text),
+            evidenceTypes = EvidenceTypeOptions
+                .Select(o => new { code = o.Value, displayName = o.Text })
+                .ToList(),
 
-            combinations = _registry.Definitions.ToDictionary(
-                d => $"{d.EvidenceTypeCode}|{d.InspectionTypeCode}",
-                d => new { discriminator = d.Discriminator, dataTypeName = d.DataType.Name })
+            exhibits = Exhibits.Select(exhibit => new
+            {
+                description = exhibit.Description,
+                evidences = exhibit.Evidences.Select(evidence => new
+                {
+                    evidenceTypeCode = evidence.EvidenceTypeCode,
+                    description = evidence.Description,
+                    inspections = evidence.Inspections.Select(inspection => new
+                    {
+                        id = inspection.Id,
+                        inspectionTypeCode = inspection.InspectionTypeCode
+                    }).ToList()
+                }).ToList()
+            }).ToList()
         };
 
         ClientConfigJson = JsonSerializer.Serialize(config);
@@ -426,16 +449,5 @@ public class CreateModel : PoCPageModel
     public InspectionCardContext? GetContext(Guid inspectionId)
     {
         return Contexts.GetOrDefault(inspectionId);
-    }
-
-    public List<SelectListItem> GetInspectionTypeOptions(string? evidenceTypeCode)
-    {
-        if (string.IsNullOrWhiteSpace(evidenceTypeCode) ||
-            !InspectionTypeOptions.TryGetValue(evidenceTypeCode, out var options))
-        {
-            return new List<SelectListItem>();
-        }
-
-        return options;
     }
 }

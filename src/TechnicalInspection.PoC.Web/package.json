@@ -3,6 +3,10 @@
   "name": "my-app",
   "private": true,
   "dependencies": {
-    "@abp/aspnetcore.mvc.ui.theme.leptonxlite": "~4.2.4"
+    "@abp/aspnetcore.mvc.ui.theme.leptonxlite": "~4.2.4",
+    "vue": "~2.7.16"
+  },
+  "resolutions": {
+    "jquery": "3.7.1"
   }
 }

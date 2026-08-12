@@ -7,13 +7,13 @@
     };
 }
 
-@* The whole wizard is one page now, so which step is current is a client-side concern:
-   Create.js applies the state classes below as the panes change. *@
+@* The whole wizard is one page, so which step is current is a client-side concern: this partial is
+   inside the Vue root, and the state classes follow the app's `pane`. *@
 
-<ol class="list-unstyled d-flex flex-wrap gap-2 mb-4" data-wizard-steps>
+<ol class="list-unstyled d-flex flex-wrap gap-2 mb-4">
     @foreach (var step in steps)
     {
-        <li class="px-3 py-2 rounded bg-body-secondary text-body-secondary" data-step="@step.Number">
+        <li class="px-3 py-2 rounded" v-bind:class="stepClass(@step.Number)">
             <strong>Step @step.Number</strong>
             <span class="ms-1">@step.Title</span>
         </li>
